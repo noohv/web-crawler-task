@@ -1,19 +1,7 @@
 import type { Page } from "@playwright/test";
 import type { CrawlConfig } from "./config";
-import path from "node:path";
-import fs from "node:fs/promises";
-
-export type IdentifiedPath = {
-  path: string; // pathname only
-  representativeUrl: string; // first url that produced this path
-};
-
-export async function readIdentifiedPaths(
-  filePath: string = path.join("out", "identified_paths.json"),
-): Promise<IdentifiedPath[]> {
-  const raw = await fs.readFile(filePath, "utf8");
-  return JSON.parse(raw) as IdentifiedPath[];
-}
+import type { StepLocalStorageCache } from "./stepLocalStorageCache";
+import type { IdentifiedPath } from "./helpers";
 
 function normalizePath(pathname: string): string {
   // We want stable keys: keep leading slash; trim trailing slashes except root.
@@ -501,6 +489,40 @@ async function tryAdvanceQuiz(
   }
 }
 
+async function readPipeStoreValueWithRetry(
+  page: Page,
+  psKey: string,
+  opts?: { attempts?: number; delayMs?: number },
+) {
+  const attempts = opts?.attempts ?? 6;
+  const delayMs = opts?.delayMs ?? 200;
+
+  for (let i = 0; i < attempts; i++) {
+    // eslint-disable-next-line no-await-in-loop
+    const value = await page
+      .evaluate((k) => localStorage.getItem(k), psKey)
+      .catch(() => null);
+    if (value !== null) return value;
+    // eslint-disable-next-line no-await-in-loop
+    await page.waitForTimeout(delayMs).catch(() => {});
+  }
+  // If still null, return null (caller may decide to retry later).
+  return null;
+}
+
+function extractTotalStepsFromPipeStoreValue(
+  raw: string | null,
+): number | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { pipe?: { totalSteps?: number } };
+    const totalSteps = parsed?.pipe?.totalSteps;
+    return Number.isFinite(totalSteps) ? (totalSteps as number) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function crawlIdentifiedPaths(
   page: Page,
   cfg: CrawlConfig,
@@ -548,6 +570,161 @@ export async function crawlIdentifiedPaths(
   return results;
 }
 
+export async function crawlIdentifiedPathsWithLocalStorageCache(
+  page: Page,
+  cfg: CrawlConfig,
+): Promise<{
+  paths: IdentifiedPath[];
+  stepLocalStorageCache: StepLocalStorageCache;
+}> {
+  // Enumeration-based discovery (same approach as `crawlIdentifiedPaths`),
+  // but also capture the `pipe_store_*` localStorage value for every first-seen path.
+  const discoveredByPath = new Map<string, string>(); // pathKey -> representativeUrl
+  const localStorageByPath = new Map<string, string | null>(); // pathKey -> pipe_store_* value
+
+  const psKey = pipeStoreKey(cfg);
+  const basePrefix = normalizePath(cfg.requiredPathPrefix);
+
+  const getStepIndexFromPathKey = (pathKey: string): number | null => {
+    const m = new RegExp(
+      `^${escapeRegex(basePrefix)}/(\\d+)-(test|name)$`,
+    ).exec(pathKey);
+    if (!m) return null;
+    const idx = Number(m[1]);
+    return Number.isFinite(idx) ? idx : null;
+  };
+
+  const readAllLocalStorageValuesNonNull = () => {
+    for (const p of discoveredByPath.keys()) {
+      if (!localStorageByPath.has(p)) return false;
+      const v = localStorageByPath.get(p);
+      if (v === null) return false;
+    }
+    return true;
+  };
+
+  // This function is now wizard-driven (no step-by-step URL enumeration).
+  // We traverse the quiz by interacting with the UI and record every first-seen path.
+
+  const recordIfDesired = async (url: string) => {
+    if (!isInPrefix(url, cfg.origin, cfg.requiredPathPrefix)) return;
+    const pathKey = getPathKey(url);
+    if (!isDesiredQuizPath(pathKey, cfg)) return;
+
+    if (!discoveredByPath.has(pathKey)) discoveredByPath.set(pathKey, url);
+
+    const existing = localStorageByPath.get(pathKey);
+    // If we've already captured a non-null snapshot, keep it stable.
+    if (existing !== undefined && existing !== null) return;
+
+    const value = await readPipeStoreValueWithRetry(page, psKey, {
+      attempts: 6,
+      delayMs: 200,
+    });
+    if (value !== null || existing === undefined)
+      localStorageByPath.set(pathKey, value);
+  };
+
+  const recordRoot = async () => {
+    const url = page.url();
+    if (!isDesiredQuizPath(getPathKey(url), cfg)) return;
+    const pathKey = getPathKey(url);
+    if (!discoveredByPath.has(pathKey)) discoveredByPath.set(pathKey, url);
+    const existing = localStorageByPath.get(pathKey);
+    if (existing === undefined || existing === null) {
+      const value = await readPipeStoreValueWithRetry(page, psKey, {
+        attempts: 6,
+        delayMs: 200,
+      });
+      localStorageByPath.set(pathKey, value);
+    }
+  };
+
+  // Run traversal once per gender seed so we can capture union coverage.
+  for (const genderSeed of cfg.genderSeeds) {
+    if (discoveredByPath.size >= cfg.maxUniquePaths) break;
+
+    await page
+      .goto(cfg.startUrl, { waitUntil: "domcontentloaded", timeout: 30000 })
+      .catch(() => {});
+    await page.waitForTimeout(500).catch(() => {});
+
+    await recordRoot();
+
+    // If gender buttons exist, pick the seed; otherwise the quiz UI may handle it during traversal.
+    await clickByButtonName(page, new RegExp(`^${genderSeed}$`, "i")).catch(
+      () => {},
+    );
+    await page.waitForTimeout(300).catch(() => {});
+
+    await tryAdvanceQuiz(page, cfg, {
+      onUrlDiscovered: recordIfDesired,
+      isAlreadyVisitedPath: (pathKey: string) => {
+        if (!isDesiredQuizPath(pathKey, cfg)) return true;
+        if (discoveredByPath.size >= cfg.maxUniquePaths) return true;
+
+        const v = localStorageByPath.get(pathKey);
+        // If we already have a non-null snapshot, treat as visited.
+        // If the snapshot was null, allow revisiting in case it becomes available later.
+        return v !== undefined && v !== null;
+      },
+    });
+
+    // Early exit: if we already discovered all step indices (1..totalSteps) and we
+    // have non-null localStorage snapshots for them, there is no point running
+    // the same traversal again for other gender seeds.
+    const latestPipeStoreValue = await readPipeStoreValueWithRetry(
+      page,
+      psKey,
+      {
+        attempts: 4,
+        delayMs: 200,
+      },
+    );
+    const totalSteps =
+      extractTotalStepsFromPipeStoreValue(latestPipeStoreValue);
+
+    if (totalSteps !== null) {
+      const discoveredStepIdx = new Set<number>();
+      for (const p of discoveredByPath.keys()) {
+        const idx = getStepIndexFromPathKey(p);
+        if (idx !== null) discoveredStepIdx.add(idx);
+      }
+
+      let allStepsDiscovered = true;
+      for (let i = 1; i <= totalSteps; i++) {
+        if (!discoveredStepIdx.has(i)) {
+          allStepsDiscovered = false;
+          break;
+        }
+      }
+
+      if (allStepsDiscovered && readAllLocalStorageValuesNonNull()) break;
+    }
+  }
+
+  const paths: IdentifiedPath[] = Array.from(discoveredByPath.entries())
+    .map(([path, representativeUrl]) => ({ path, representativeUrl }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+
+  const items: Array<{ path: string; value: string | null }> = paths.map(
+    (p) => ({
+      path: p.path,
+      value: localStorageByPath.get(p.path) ?? null,
+    }),
+  );
+
+  const stepLocalStorageCache: StepLocalStorageCache = {
+    pipeStoreKey: psKey,
+    items,
+  };
+
+  if (paths.length === 0)
+    throw new Error("No desired quiz paths were discovered.");
+
+  return { paths, stepLocalStorageCache };
+}
+
 function escapeRegex(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -555,10 +732,104 @@ function escapeRegex(input: string): string {
 function isDesiredQuizPath(pathKey: string, cfg: CrawlConfig): boolean {
   const basePrefix = normalizePath(cfg.requiredPathPrefix); // no trailing slash
 
-  // Root "pipe" page (no step suffix) is included in identified_paths.json.
+  // Root "pipe" page (no step suffix) is included in IDENTIFIED_PATHS_FILE_PATH.
   if (pathKey === basePrefix) return true;
 
   // Step pages like `/.../4-test` and `/.../4-name`.
   const stepRe = new RegExp(`^${escapeRegex(basePrefix)}/\\d+-(test|name)$`);
   return stepRe.test(pathKey);
+}
+
+function pipeStoreKey(cfg: CrawlConfig): string {
+  // Must match src/autoqa/stepLocalStorageCache.ts buildPipeStoreKey().
+  return `pipe_store_${cfg.requiredPathPrefix}`;
+}
+
+export async function crawlIdentifiedPathsAndLocalStorageCache(
+  page: Page,
+  cfg: CrawlConfig,
+): Promise<{
+  paths: IdentifiedPath[];
+  stepLocalStorageCache: StepLocalStorageCache;
+}> {
+  const discoveredByPath = new Map<string, string>(); // pathKey -> representativeUrl
+  const localStorageByPath = new Map<string, string | null>(); // pathKey -> pipe_store_* value
+
+  const psKey = pipeStoreKey(cfg);
+
+  const recordIfDesired = async (url: string) => {
+    if (!isInPrefix(url, cfg.origin, cfg.requiredPathPrefix)) return;
+    const pathKey = getPathKey(url);
+    if (!isDesiredQuizPath(pathKey, cfg)) return;
+
+    if (!discoveredByPath.has(pathKey)) discoveredByPath.set(pathKey, url);
+
+    const existing = localStorageByPath.get(pathKey);
+    // If we've already captured a non-null snapshot, keep it stable.
+    if (existing !== undefined && existing !== null) return;
+
+    const value = await page.evaluate((k) => localStorage.getItem(k), psKey);
+    // If we previously saw null, but now we get a real value, update it.
+    if (value !== null || existing === undefined)
+      localStorageByPath.set(pathKey, value);
+  };
+
+  const recordRoot = async () => {
+    const url = page.url();
+    if (!isDesiredQuizPath(getPathKey(url), cfg)) return;
+    const pathKey = getPathKey(url);
+    if (!discoveredByPath.has(pathKey)) discoveredByPath.set(pathKey, url);
+    if (!localStorageByPath.has(pathKey)) {
+      const value = await page.evaluate((k) => localStorage.getItem(k), psKey);
+      localStorageByPath.set(pathKey, value);
+    }
+  };
+
+  // Run the wizard traversal once per gender seed so we can capture union coverage.
+  for (const genderSeed of cfg.genderSeeds) {
+    await page
+      .goto(cfg.startUrl, { waitUntil: "domcontentloaded", timeout: 30000 })
+      .catch(() => {});
+    await page.waitForTimeout(500).catch(() => {});
+
+    await recordRoot();
+
+    // If the gender buttons exist, pick the seed; otherwise the quiz UI may handle it during traversal.
+    await clickByButtonName(page, new RegExp(`^${genderSeed}$`, "i")).catch(
+      () => {},
+    );
+    await page.waitForTimeout(300).catch(() => {});
+
+    await tryAdvanceQuiz(page, cfg, {
+      onUrlDiscovered: recordIfDesired,
+      isAlreadyVisitedPath: (pathKey: string) => {
+        if (!isDesiredQuizPath(pathKey, cfg)) return true;
+        return localStorageByPath.has(pathKey);
+      },
+    });
+  }
+
+  const paths: IdentifiedPath[] = Array.from(discoveredByPath.entries())
+    .map(([path, representativeUrl]) => ({ path, representativeUrl }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+
+  // Ensure we output a cache entry for every discovered path.
+  // If a path was discovered but localStorage was not readable, we keep it as null.
+  const items: Array<{ path: string; value: string | null }> = paths.map(
+    (p) => ({
+      path: p.path,
+      value: localStorageByPath.get(p.path) ?? null,
+    }),
+  );
+
+  const stepLocalStorageCache: StepLocalStorageCache = {
+    pipeStoreKey: psKey,
+    items,
+  };
+
+  // Basic sanity check so Stage 3 doesn't fail later due to empty cache.
+  if (paths.length === 0)
+    throw new Error("No desired quiz paths were discovered.");
+
+  return { paths, stepLocalStorageCache };
 }

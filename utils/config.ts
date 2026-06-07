@@ -1,3 +1,5 @@
+import path from "node:path";
+
 export type CrawlConfig = {
   startUrl: string;
   origin: string; // e.g. https://fasting.best.me
@@ -41,3 +43,21 @@ export const defaultCrawlConfig: CrawlConfig = {
     goalWeightLbs: 150,
   },
 };
+
+export const IDENTIFIED_PATHS_FILE_NAME = "identified_paths.json";
+export const SCREENSHOTS_DIR_NAME = "screenshots";
+export const IDENTIFIED_PATHS_FILE_PATH = path.join(
+  "out",
+  IDENTIFIED_PATHS_FILE_NAME,
+);
+export const SCREENSHOTS_DIR_PATH = path.join("out", SCREENSHOTS_DIR_NAME);
+export const SCREENSHOTS_MANIFEST_FILE_NAME = "screenshots_manifest.json";
+export const SCREENSHOTS_MANIFEST_FILE_PATH = path.join(
+  "out",
+  SCREENSHOTS_MANIFEST_FILE_NAME,
+);
+export const STEP_LOCAL_STORAGE_FILE_NAME = "step_local_storage.json";
+export const STEP_LOCAL_STORAGE_FILE_PATH = path.join(
+  "out",
+  STEP_LOCAL_STORAGE_FILE_NAME,
+);

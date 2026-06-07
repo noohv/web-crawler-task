@@ -1,14 +1,28 @@
 import { test, expect } from "@playwright/test";
-import { crawlIdentifiedPaths } from "../utils/crawl";
-import { defaultCrawlConfig } from "../utils/config";
+import fs from "node:fs/promises";
+import { crawlIdentifiedPathsWithLocalStorageCache } from "../utils/crawl";
+import {
+  defaultCrawlConfig,
+  IDENTIFIED_PATHS_FILE_NAME,
+  SCREENSHOTS_DIR_PATH,
+  STEP_LOCAL_STORAGE_FILE_NAME,
+} from "../utils/config";
 import { writeJsonToOut } from "../utils/helpers";
+import { captureIdentifiedPages } from "../utils/captureIdentifiedPages";
 
 test("Task test pipeline", async ({ page }) => {
   // Step 1: Crawl & Identify paths
-  const identifiedPaths = await crawlIdentifiedPaths(page, defaultCrawlConfig);
+  const { paths, stepLocalStorageCache } =
+    await crawlIdentifiedPathsWithLocalStorageCache(page, defaultCrawlConfig);
 
   // Step 2: Document
-  await writeJsonToOut("identified_paths.json", identifiedPaths);
-  console.log(identifiedPaths.map((path) => path.path));
-  expect(identifiedPaths.length).toBeGreaterThan(0);
+  await writeJsonToOut(IDENTIFIED_PATHS_FILE_NAME, paths);
+  console.log(paths.map((path) => path.path));
+  expect(paths.length).toBeGreaterThan(0);
+  await writeJsonToOut(STEP_LOCAL_STORAGE_FILE_NAME, stepLocalStorageCache);
+
+  // Step 3: Capture screenshots
+  await captureIdentifiedPages(page);
+  const screenshots = await fs.readdir(SCREENSHOTS_DIR_PATH);
+  expect(screenshots.length).toBeGreaterThan(0);
 });
