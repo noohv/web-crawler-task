@@ -30,14 +30,49 @@ async function waitShortForUrlChange(
   page: Page,
   prevUrl: string,
   timeoutMs: number,
-) {
+): Promise<boolean> {
   // Some quiz option clicks auto-navigate; in that case we want to continue quickly.
   try {
     await page.waitForFunction((u) => window.location.href !== u, prevUrl, {
       timeout: timeoutMs,
     });
+    return true;
   } catch {
     // ignore timeouts
+    return false;
+  }
+}
+
+async function waitForUrlChangeAndRecordStepPaths(
+  page: Page,
+  prevUrl: string,
+  timeoutMs: number,
+  opts: {
+    onUrlDiscovered: (url: string) => Promise<void>;
+    isAlreadyVisitedPath: (pathKey: string) => boolean;
+  },
+) {
+  const changed = await waitShortForUrlChange(page, prevUrl, timeoutMs);
+  if (!changed) return;
+
+  // After the first URL change, capture any *additional* intermediate step
+  // paths that may appear very briefly (e.g. /2-test -> /3-test).
+  const recordWindowMs = 300;
+  const pollMs = 100;
+
+  const deadline = Date.now() + recordWindowMs;
+  const seenPathKeys = new Set<string>();
+
+  while (Date.now() < deadline) {
+    const url = page.url();
+    const pathKey = getPathKey(url);
+
+    if (!seenPathKeys.has(pathKey) && !opts.isAlreadyVisitedPath(pathKey)) {
+      seenPathKeys.add(pathKey);
+      await opts.onUrlDiscovered(url);
+    }
+
+    await page.waitForTimeout(pollMs).catch(() => {});
   }
 }
 
@@ -421,7 +456,7 @@ async function tryAdvanceQuiz(
       );
       if (clickedOption) {
         await page.waitForLoadState("domcontentloaded").catch(() => {});
-        await waitShortForUrlChange(page, prevUrl, 8000);
+        await waitForUrlChangeAndRecordStepPaths(page, prevUrl, 8000, opts);
         await page.waitForTimeout(250).catch(() => {});
         continue;
       }
@@ -462,7 +497,7 @@ async function tryAdvanceQuiz(
     if (!stillDisabled) {
       await continueBtn.click({ timeout: 3000 }).catch(() => {});
       await page.waitForLoadState("domcontentloaded").catch(() => {});
-      await waitShortForUrlChange(page, prevUrl, 5000);
+      await waitForUrlChangeAndRecordStepPaths(page, prevUrl, 5000, opts);
       await page.waitForTimeout(250).catch(() => {});
       continue;
     }
@@ -480,7 +515,7 @@ async function tryAdvanceQuiz(
     if (enabledNow) {
       await continueBtn.click({ timeout: 3000 }).catch(() => {});
       await page.waitForLoadState("domcontentloaded").catch(() => {});
-      await waitShortForUrlChange(page, prevUrl, 5000);
+      await waitForUrlChangeAndRecordStepPaths(page, prevUrl, 5000, opts);
       await page.waitForTimeout(250).catch(() => {});
       continue;
     }
@@ -561,9 +596,9 @@ export async function crawlIdentifiedPaths(
     });
   }
 
-  const results: IdentifiedPath[] = Array.from(discoveredByPath.entries())
-    .map(([path, representativeUrl]) => ({ path, representativeUrl }))
-    .sort((a, b) => a.path.localeCompare(b.path));
+  const results: IdentifiedPath[] = Array.from(discoveredByPath.entries()).map(
+    ([path, representativeUrl]) => ({ path, representativeUrl }),
+  );
 
   return results;
 }
@@ -699,9 +734,9 @@ export async function crawlIdentifiedPathsWithLocalStorageCache(
     }
   }
 
-  const paths: IdentifiedPath[] = Array.from(discoveredByPath.entries())
-    .map(([path, representativeUrl]) => ({ path, representativeUrl }))
-    .sort((a, b) => a.path.localeCompare(b.path));
+  const paths: IdentifiedPath[] = Array.from(discoveredByPath.entries()).map(
+    ([path, representativeUrl]) => ({ path, representativeUrl }),
+  );
 
   const items: Array<{ path: string; value: string | null }> = paths.map(
     (p) => ({
