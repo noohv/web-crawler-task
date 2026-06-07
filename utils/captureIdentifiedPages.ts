@@ -84,7 +84,20 @@ async function screenshotOne(args: {
   };
 }
 
+/**
+ * Render and screenshot each discovered quiz step.
+ *
+ * Uses `out/identified_paths.json` plus `out/step_local_storage.json` to load
+ * the correct wizard state deterministically for every path.
+ */
 export async function captureIdentifiedPages(page: Page): Promise<void> {
+  /**
+   * Screenshot each discovered step URL by:
+   * 1) navigating to the representative URL,
+   * 2) injecting the cached `localStorage` snapshot (pipe_store_* key),
+   * 3) reloading so the wizard rehydrates from the snapshot,
+   * 4) saving a full-page screenshot.
+   */
   const items = await loadIdentifiedItems();
   const { screenshotsDir, pipeStoreKey, localStorageByPath } =
     await initScreenshotsRun({ page, items });

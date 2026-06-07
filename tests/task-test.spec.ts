@@ -11,6 +11,13 @@ import { writeJsonToOut } from "../utils/helpers";
 import { captureIdentifiedPages } from "../utils/captureIdentifiedPages";
 import { validateLanguageSpelling } from "../utils/validateLanguageSpelling";
 
+/**
+ * End-to-end pipeline test:
+ * 1) Crawl the wizard and discover desired step paths (+ localStorage snapshots)
+ * 2) Write discovered paths to `out/identified_paths.json`
+ * 3) Render each discovered step to screenshots (using cached localStorage)
+ * 4) Validate language/spelling for each step and write `out/validation_report.json`
+ */
 test("Task test pipeline", async ({ page }) => {
   // Step 1: Crawl & Identify paths
   console.log("Step 1: Crawl & Identify paths");

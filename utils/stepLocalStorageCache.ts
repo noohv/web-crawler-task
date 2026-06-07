@@ -3,14 +3,37 @@ import path from "node:path";
 import type { Page } from "@playwright/test";
 
 export type StepLocalStorageCache = {
+  /**
+   * The localStorage key used to store the "pipe store" snapshot.
+   *
+   * Must match the key used by the wizard on the target site.
+   */
   pipeStoreKey: string;
+
+  /**
+   * Cached localStorage snapshot values per discovered step path.
+   * If a snapshot couldn't be read, `value` is `null`.
+   */
   items: Array<{ path: string; value: string | null }>;
 };
 
+/**
+ * Build the `pipe_store_*` localStorage key for this crawl.
+ *
+ * The exact format must stay consistent with `utils/crawl.ts`.
+ */
 export function buildPipeStoreKey(requiredPathPrefix: string): string {
   return `pipe_store_${requiredPathPrefix}`;
 }
 
+/**
+ * Load the cached `step_local_storage.json` and ensure it contains
+ * localStorage values for every `requiredPaths` entry.
+ *
+ * Throws if the file is missing, the pipe store key mismatches, or paths are
+ * missing. Used for screenshot-only runs where we don't want to silently
+ * skip steps.
+ */
 export async function loadStepLocalStorageCacheStrict(args: {
   filePath?: string;
   expectedPipeStoreKey: string;
@@ -49,6 +72,12 @@ export async function loadStepLocalStorageCacheStrict(args: {
   return cache;
 }
 
+/**
+ * Load `step_local_storage.json` if present, otherwise return `null`.
+ *
+ * Used by the language/spelling validation stage so it can still run even
+ * if localStorage caching wasn't produced.
+ */
 export async function loadStepLocalStorageCacheOptional(args: {
   filePath?: string;
 }): Promise<StepLocalStorageCache | null> {
@@ -61,6 +90,9 @@ export async function loadStepLocalStorageCacheOptional(args: {
   }
 }
 
+/**
+ * Convert the cache format into a lookup map: `path -> localStorageValue`.
+ */
 export function buildLocalStorageByPath(
   cache: StepLocalStorageCache,
 ): Map<string, string | null> {
@@ -69,6 +101,11 @@ export function buildLocalStorageByPath(
   return map;
 }
 
+/**
+ * Apply the cached pipeStore snapshot into the current page's localStorage.
+ *
+ * If `value` is `null`, the key is removed instead of being set.
+ */
 export async function applyPipeStoreKey(
   page: Page,
   pipeStoreKey: string,

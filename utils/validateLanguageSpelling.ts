@@ -207,7 +207,19 @@ function buildReport(pages: PageReport[]) {
   };
 }
 
+/**
+ * Validate language and spelling for every discovered step page.
+ *
+ * Writes a detailed report to `out/validation_report.json`.
+ */
 export async function validateLanguageSpelling(page: Page): Promise<void> {
+  /**
+   * Validate that each discovered step page:
+   * - has English language content (via franc) and
+   * - doesn't contain too many misspelled words (via nspell).
+   *
+   * Writes results to `out/validation_report.json`.
+   */
   const items = await loadIdentifiedItems();
   const { pipeStoreKey, localStorageByPath } = await loadLocalStorageContext();
   const { franc, spell } = await loadLanguageTools();

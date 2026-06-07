@@ -31,6 +31,13 @@ async function waitShortForUrlChange(
   prevUrl: string,
   timeoutMs: number,
 ): Promise<boolean> {
+  /**
+   * Wait until the browser navigates away from `prevUrl` (or the timeout
+   * expires).
+   *
+   * This keeps the wizard traversal moving forward when UI interactions
+   * trigger client-side navigation.
+   */
   // Some quiz option clicks auto-navigate; in that case we want to continue quickly.
   try {
     await page.waitForFunction((u) => window.location.href !== u, prevUrl, {
@@ -52,12 +59,26 @@ async function waitForUrlChangeAndRecordStepPaths(
     isAlreadyVisitedPath: (pathKey: string) => boolean;
   },
 ) {
+  /**
+   * After a click triggers navigation, record any desired step paths that may
+   * appear briefly during intermediate route transitions (e.g. `/2-test` ->
+   * `/3-test`).
+   *
+   * The crawler's main loop samples `page.url()` only at loop boundaries,
+   * so without this extra "record window" some intermediate paths can be
+   * missed.
+   */
   const changed = await waitShortForUrlChange(page, prevUrl, timeoutMs);
   if (!changed) return;
 
   // After the first URL change, capture any *additional* intermediate step
   // paths that may appear very briefly (e.g. /2-test -> /3-test).
   const recordWindowMs = 300;
+  // This window is a trade-off:
+  // - too small: may still miss very brief intermediate routes
+  // - too large: crawler gets slower because we keep polling after each click
+  // Polling frequency for intermediate route sampling.
+  // Smaller values may be more accurate; larger values are cheaper.
   const pollMs = 100;
 
   const deadline = Date.now() + recordWindowMs;
@@ -562,6 +583,14 @@ export async function crawlIdentifiedPaths(
   page: Page,
   cfg: CrawlConfig,
 ): Promise<IdentifiedPath[]> {
+  /**
+   * Discover all desired step paths the wizard reaches by interacting with the UI.
+   *
+   * This variant only records `{ path, representativeUrl }` (no localStorage cache),
+   * and returns paths in the order they were first discovered.
+   *
+   * Note: `path` is the URL pathname only (no origin/query).
+   */
   const discoveredByPath = new Map<string, string>(); // pathKey -> representativeUrl
 
   const recordIfDesired = async (url: string) => {
@@ -610,6 +639,17 @@ export async function crawlIdentifiedPathsWithLocalStorageCache(
   paths: IdentifiedPath[];
   stepLocalStorageCache: StepLocalStorageCache;
 }> {
+  /**
+   * Wizard-driven discovery of step paths + cached localStorage snapshots.
+   *
+   * For each first-seen desired step pathname, we also capture the value stored
+   * under `pipe_store_*` in localStorage. Screenshots/validation later re-apply
+   * that snapshot to render each step deterministically.
+   *
+   * Returns:
+   * - `paths`: discovered step pathnames in discovery order
+   * - `stepLocalStorageCache`: `pipeStoreKey` + cached values per path (nullable)
+   */
   // Enumeration-based discovery (same approach as `crawlIdentifiedPaths`),
   // but also capture the `pipe_store_*` localStorage value for every first-seen path.
   const discoveredByPath = new Map<string, string>(); // pathKey -> representativeUrl
@@ -783,6 +823,14 @@ export async function crawlIdentifiedPathsAndLocalStorageCache(
   paths: IdentifiedPath[];
   stepLocalStorageCache: StepLocalStorageCache;
 }> {
+  /**
+   * Alternative discovery mode (kept for experimentation).
+   *
+   * Compared to `crawlIdentifiedPathsWithLocalStorageCache`, this version captures
+   * localStorage snapshots in a slightly different way but should still produce:
+   * - `paths` discovered under `requiredPathPrefix`
+   * - `stepLocalStorageCache` with cached `pipe_store_*` values
+   */
   const discoveredByPath = new Map<string, string>(); // pathKey -> representativeUrl
   const localStorageByPath = new Map<string, string | null>(); // pathKey -> pipe_store_* value
 
