@@ -1,5 +1,19 @@
 import type { Page } from "@playwright/test";
 import type { CrawlConfig } from "./config";
+import path from "node:path";
+import fs from "node:fs/promises";
+
+export type IdentifiedPath = {
+  path: string; // pathname only
+  representativeUrl: string; // first url that produced this path
+};
+
+export async function readIdentifiedPaths(
+  filePath: string = path.join("out", "identified_paths.json"),
+): Promise<IdentifiedPath[]> {
+  const raw = await fs.readFile(filePath, "utf8");
+  return JSON.parse(raw) as IdentifiedPath[];
+}
 
 function normalizePath(pathname: string): string {
   // We want stable keys: keep leading slash; trim trailing slashes except root.
@@ -56,7 +70,8 @@ async function clickByButtonName(
 async function clickVisibleImageButtons(page: Page): Promise<boolean> {
   const imgButtons = page.locator(".image-button");
   const count = await imgButtons.count().catch(() => 0);
-
+  // Your rule: click all `.image-button` elements (when present/visible).
+  // Some wizards require selecting multiple visual options per step.
   let clicked = false;
   for (let i = 0; i < count; i++) {
     const btn = imgButtons.nth(i);
@@ -489,7 +504,7 @@ async function tryAdvanceQuiz(
 export async function crawlIdentifiedPaths(
   page: Page,
   cfg: CrawlConfig,
-): Promise<void> {
+): Promise<IdentifiedPath[]> {
   const discoveredByPath = new Map<string, string>(); // pathKey -> representativeUrl
 
   const recordIfDesired = async (url: string) => {
@@ -525,6 +540,12 @@ export async function crawlIdentifiedPaths(
       },
     });
   }
+
+  const results: IdentifiedPath[] = Array.from(discoveredByPath.entries())
+    .map(([path, representativeUrl]) => ({ path, representativeUrl }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+
+  return results;
 }
 
 function escapeRegex(input: string): string {
