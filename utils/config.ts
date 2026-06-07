@@ -61,3 +61,8 @@ export const STEP_LOCAL_STORAGE_FILE_PATH = path.join(
   "out",
   STEP_LOCAL_STORAGE_FILE_NAME,
 );
+export const VALIDATION_REPORT_FILE_NAME = "validation_report.json";
+export const VALIDATION_REPORT_FILE_PATH = path.join(
+  "out",
+  VALIDATION_REPORT_FILE_NAME,
+);

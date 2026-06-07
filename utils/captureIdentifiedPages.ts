@@ -9,7 +9,9 @@ import {
 } from "./config";
 import {
   type IdentifiedPath,
+  navigateToUrl,
   readIdentifiedPaths,
+  reloadPage,
   toSafeSlug,
 } from "./helpers";
 import {
@@ -70,16 +72,9 @@ async function screenshotOne(args: {
   const fileSlug = toSafeSlug(item.path);
   const outFile = path.join(screenshotsDir, `${fileSlug}.png`);
 
-  await page
-    .goto(item.representativeUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    })
-    .catch(() => {});
+  await navigateToUrl(page, item.representativeUrl);
   await applyPipeStoreKey(page, pipeStoreKey, lsValue);
-  await page
-    .reload({ waitUntil: "domcontentloaded", timeout: 30000 })
-    .catch(() => {});
+  await reloadPage(page);
   await page.waitForTimeout(400);
 
   await page.screenshot({ path: outFile, fullPage: true });

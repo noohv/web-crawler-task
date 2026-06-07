@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { IDENTIFIED_PATHS_FILE_PATH } from "./config";
@@ -27,4 +28,15 @@ export function toSafeSlug(inputPath: string): string {
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
     .replace(/-+/g, "-")
     .toLowerCase();
+}
+
+export async function navigateToUrl(page: Page, url: string): Promise<void> {
+  await page.goto(url, {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
+}
+
+export async function reloadPage(page: Page): Promise<void> {
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
 }

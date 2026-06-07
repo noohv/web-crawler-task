@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import type { CrawlConfig } from "./config";
 import type { StepLocalStorageCache } from "./stepLocalStorageCache";
-import type { IdentifiedPath } from "./helpers";
+import { navigateToUrl, type IdentifiedPath } from "./helpers";
 
 function normalizePath(pathname: string): string {
   // We want stable keys: keep leading slash; trim trailing slashes except root.
@@ -542,9 +542,7 @@ export async function crawlIdentifiedPaths(
   for (const genderSeed of cfg.genderSeeds) {
     if (stopWhenLimitReached()) break;
 
-    await page
-      .goto(cfg.startUrl, { waitUntil: "domcontentloaded", timeout: 30000 })
-      .catch(() => {});
+    await navigateToUrl(page, cfg.startUrl);
     await page.waitForTimeout(500).catch(() => {});
 
     // If the gender buttons exist, pick the seed; otherwise the quiz UI may handle it.
@@ -644,9 +642,7 @@ export async function crawlIdentifiedPathsWithLocalStorageCache(
   for (const genderSeed of cfg.genderSeeds) {
     if (discoveredByPath.size >= cfg.maxUniquePaths) break;
 
-    await page
-      .goto(cfg.startUrl, { waitUntil: "domcontentloaded", timeout: 30000 })
-      .catch(() => {});
+    await navigateToUrl(page, cfg.startUrl);
     await page.waitForTimeout(500).catch(() => {});
 
     await recordRoot();
@@ -787,9 +783,7 @@ export async function crawlIdentifiedPathsAndLocalStorageCache(
 
   // Run the wizard traversal once per gender seed so we can capture union coverage.
   for (const genderSeed of cfg.genderSeeds) {
-    await page
-      .goto(cfg.startUrl, { waitUntil: "domcontentloaded", timeout: 30000 })
-      .catch(() => {});
+    await navigateToUrl(page, cfg.startUrl);
     await page.waitForTimeout(500).catch(() => {});
 
     await recordRoot();
